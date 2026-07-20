@@ -217,12 +217,60 @@
   </header>
 
   <div class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true" data-tab="text"><span class="ic">📝</span> 文字</button>
+    <button class="tab" role="tab" aria-selected="true" data-tab="doc"><span class="ic">📄</span> 文件</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="text"><span class="ic">📝</span> 文字</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="image"><span class="ic">🖼️</span> 圖片</button>
   </div>
 
+  <!-- ============ DOCUMENT ============ -->
+  <section class="panel active" id="panel-doc" role="tabpanel">
+    <div class="card controlbar">
+      <div class="ctl-row">
+        <div class="ctl-group">
+          <span class="lbl">遮蔽方式</span>
+          <div class="seg" id="modeSegDoc" role="group" aria-label="遮蔽方式">
+            <button data-mode="redact" aria-pressed="true">██ 塗黑</button>
+            <button data-mode="label" aria-pressed="false">［類別標籤］</button>
+            <button data-mode="pseudo" aria-pressed="false">一致假名</button>
+            <button data-mode="hash" aria-pressed="false">雜湊</button>
+          </div>
+        </div>
+        <div class="ctl-group" style="flex:1;min-width:260px">
+          <span class="lbl">偵測範圍</span>
+          <p class="hint" style="margin:0">偵測項目與自訂字典沿用「文字」分頁的設定（共用引擎）；到那邊開關類別、加客戶名／公司名。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="drop" id="docDrop">
+      <div class="big">📄</div>
+      <div><b>拖曳 Word / PowerPoint / 純文字檔到這裡</b>，或點一下選檔</div>
+      <div class="sub">.docx · .pptx · .txt — 直接還你遮蔽後的<b>同格式</b>檔 · 檔案不離開你的裝置</div>
+      <div class="sub" style="margin-top:8px;color:var(--biz)">PDF ＋ 照片內文字／人臉：下一版</div>
+      <input type="file" id="docFile" accept=".docx,.pptx,.txt" hidden />
+    </div>
+
+    <div id="docResult" style="display:none">
+      <div class="card" style="padding:16px;margin-bottom:14px">
+        <div class="io-head" style="margin:0">
+          <span class="lbl" style="display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:0">
+            <span id="docName" style="font-family:var(--font-mono);color:var(--ink)"></span>
+            <span id="docBadge" class="stat" style="padding:3px 9px"></span>
+          </span>
+          <span style="display:flex;gap:8px">
+            <button class="btn sm ghost" id="docNew">換檔</button>
+            <button class="btn sm primary" id="docDownload">⬇ 下載遮蔽檔</button>
+          </span>
+        </div>
+        <div class="stats" id="docStats" style="margin-top:12px"></div>
+      </div>
+      <div class="io-head"><span class="lbl">預覽（原文，標示將被遮蔽處）</span></div>
+      <div class="out" id="docPreview" style="max-height:420px"></div>
+    </div>
+  </section>
+
   <!-- ============ TEXT ============ -->
-  <section class="panel active" id="panel-text" role="tabpanel">
+  <section class="panel" id="panel-text" role="tabpanel">
     <div class="card controlbar">
       <div class="ctl-row">
         <div class="ctl-group">
@@ -466,12 +514,13 @@
     });
   }
 
-  $('#modeSeg').addEventListener('click',function(e){
-    var b=e.target.closest('button'); if(!b)return;
-    state.mode=b.dataset.mode;
-    $$('#modeSeg button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});
-    render();
-  });
+  function setMode(m){
+    state.mode=m;
+    ['#modeSeg','#modeSegDoc'].forEach(function(sel){ $$(sel+' button').forEach(function(x){x.setAttribute('aria-pressed',x.dataset.mode===m)}); });
+    render(); if(typeof docState!=='undefined' && docState.text) renderDocPreview();
+  }
+  $('#modeSeg').addEventListener('click',function(e){var b=e.target.closest('button');if(b)setMode(b.dataset.mode);});
+  $('#modeSegDoc').addEventListener('click',function(e){var b=e.target.closest('button');if(b)setMode(b.dataset.mode);});
   $('#peekBtn').addEventListener('click',function(){
     state.peek=!state.peek; this.setAttribute('aria-pressed',state.peek);
     this.innerHTML=state.peek?'🙈 隱藏':'👁 檢視偵測'; render();
@@ -501,6 +550,122 @@
   });
 
   buildChips(); render();
+
+  /* =======================================================
+     DOCUMENT  (docx / pptx / txt) — zero-dependency
+     ======================================================= */
+  function maskText(text){var hits=collect(text),i=0,out='';hits.forEach(function(h){out+=text.slice(i,h.start)+tokenFor(h);i=h.end;});out+=text.slice(i);return {out:out,hits:hits};}
+
+  var CRC=(function(){var t=[];for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+  function crc32(b){var c=0xFFFFFFFF;for(var i=0;i<b.length;i++)c=CRC[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+  function readZip(u8){
+    var dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength),eocd=-1;
+    for(var i=u8.length-22;i>=0;i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}}
+    if(eocd<0)throw new Error('不是有效的 zip / Office 檔');
+    var count=dv.getUint16(eocd+10,true),off=dv.getUint32(eocd+16,true),entries=[],p=off;
+    for(var n=0;n<count;n++){
+      if(dv.getUint32(p,true)!==0x02014b50)break;
+      var method=dv.getUint16(p+10,true),crc=dv.getUint32(p+16,true),cs=dv.getUint32(p+20,true),us=dv.getUint32(p+24,true);
+      var nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lho=dv.getUint32(p+42,true);
+      var name=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));
+      entries.push({name:name,method:method,crc:crc,compSize:cs,uncompSize:us,lho:lho});p+=46+nl+xl+cl;
+    }
+    entries.forEach(function(e){var nl=dv.getUint16(e.lho+26,true),xl=dv.getUint16(e.lho+28,true);var ds=e.lho+30+nl+xl;e.comp=u8.subarray(ds,ds+e.compSize);});
+    return entries;
+  }
+  function inflateRaw(bytes,method){if(method===0)return Promise.resolve(bytes);return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer().then(function(ab){return new Uint8Array(ab);});}
+  function buildZip(items){
+    var enc=new TextEncoder(),parts=[],offset=0,central=[];
+    items.forEach(function(it){
+      var nb=enc.encode(it.name),lh=new Uint8Array(30+nb.length),dv=new DataView(lh.buffer);
+      dv.setUint32(0,0x04034b50,true);dv.setUint16(4,20,true);dv.setUint16(6,0,true);dv.setUint16(8,it.method,true);
+      dv.setUint16(10,0,true);dv.setUint16(12,0x21,true);dv.setUint32(14,it.crc,true);dv.setUint32(18,it.compSize,true);
+      dv.setUint32(22,it.uncompSize,true);dv.setUint16(26,nb.length,true);dv.setUint16(28,0,true);lh.set(nb,30);
+      parts.push(lh,it.bytes);central.push({nb:nb,it:it,offset:offset});offset+=lh.length+it.bytes.length;
+    });
+    var cdStart=offset;
+    central.forEach(function(c){
+      var it=c.it,ch=new Uint8Array(46+c.nb.length),dv=new DataView(ch.buffer);
+      dv.setUint32(0,0x02014b50,true);dv.setUint16(4,20,true);dv.setUint16(6,20,true);dv.setUint16(8,0,true);dv.setUint16(10,it.method,true);
+      dv.setUint16(12,0,true);dv.setUint16(14,0x21,true);dv.setUint32(16,it.crc,true);dv.setUint32(20,it.compSize,true);dv.setUint32(24,it.uncompSize,true);
+      dv.setUint16(28,c.nb.length,true);dv.setUint32(42,c.offset,true);ch.set(c.nb,46);parts.push(ch);offset+=ch.length;
+    });
+    var eocd=new Uint8Array(22),edv=new DataView(eocd.buffer);
+    edv.setUint32(0,0x06054b50,true);edv.setUint16(8,central.length,true);edv.setUint16(10,central.length,true);
+    edv.setUint32(12,offset-cdStart,true);edv.setUint32(16,cdStart,true);parts.push(eocd);
+    var total=parts.reduce(function(a,p){return a+p.length},0),out=new Uint8Array(total),o=0;parts.forEach(function(p){out.set(p,o);o+=p.length;});return out;
+  }
+  function xmlEsc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function xmlUnesc(s){return s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');}
+  function docTargets(ext){return ext==='docx'?function(n){return /^word\/(document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/.test(n)}:function(n){return /^ppt\/(slides|notesSlides)\/[^/]+\.xml$/.test(n)};}
+  function docTagRe(ext){return ext==='docx'?/(<w:t\b[^>]*>)([^<]*)(<\/w:t>)/g:/(<a:t\b[^>]*>)([^<]*)(<\/a:t>)/g;}
+
+  function extractOfficeText(u8,ext){
+    var entries=readZip(u8),isT=docTargets(ext),re=docTagRe(ext);
+    return Promise.all(entries.filter(function(e){return isT(e.name)}).map(function(e){
+      return inflateRaw(e.comp,e.method).then(function(raw){
+        var xml=new TextDecoder().decode(raw),m,txt=[];re.lastIndex=0;
+        while((m=re.exec(xml))!==null){txt.push(xmlUnesc(m[2]));}
+        return txt.join(ext==='docx'?'':'\n');
+      });
+    })).then(function(arr){return arr.join('\n');});
+  }
+  async function processOffice(u8,ext){
+    tokenMaps={};
+    var entries=readZip(u8),isT=docTargets(ext),re=docTagRe(ext),items=[],hits=0;
+    for(var k=0;k<entries.length;k++){
+      var e=entries[k];
+      if(isT(e.name)){
+        var xml=new TextDecoder().decode(await inflateRaw(e.comp,e.method));
+        var nx=xml.replace(re,function(m,open,inner,close){var r=maskText(xmlUnesc(inner));hits+=r.hits.length;return open+xmlEsc(r.out)+close;});
+        var ob=new TextEncoder().encode(nx);
+        items.push({name:e.name,method:0,crc:crc32(ob),compSize:ob.length,uncompSize:ob.length,bytes:ob});
+      }else{
+        items.push({name:e.name,method:e.method,crc:e.crc,compSize:e.compSize,uncompSize:e.uncompSize,bytes:e.comp});
+      }
+    }
+    return {out:buildZip(items),hits:hits};
+  }
+
+  var docState={buf:null,name:'',ext:'',text:''};
+  var docDrop=$('#docDrop'),docFile=$('#docFile'),docResult=$('#docResult');
+  docDrop.addEventListener('click',function(){docFile.click()});
+  $('#docNew').addEventListener('click',function(){docFile.click()});
+  docDrop.addEventListener('dragover',function(e){e.preventDefault();docDrop.classList.add('over')});
+  docDrop.addEventListener('dragleave',function(){docDrop.classList.remove('over')});
+  docDrop.addEventListener('drop',function(e){e.preventDefault();docDrop.classList.remove('over');if(e.dataTransfer.files[0])loadDoc(e.dataTransfer.files[0]);});
+  docFile.addEventListener('change',function(e){if(e.target.files[0])loadDoc(e.target.files[0]);});
+
+  function loadDoc(f){
+    var name=f.name,ext=(name.split('.').pop()||'').toLowerCase();
+    if(ext==='pdf'){alert('PDF 支援下一版加入。先用 Word / PPT / 純文字，或到「圖片」分頁處理截圖。');return;}
+    if(['docx','pptx','txt'].indexOf(ext)<0){alert('目前支援 .docx / .pptx / .txt');return;}
+    docState.name=name;docState.ext=ext;
+    if(ext==='txt'){ f.text().then(function(t){docState.buf=null;docState.text=t;renderDocPreview();}); }
+    else { f.arrayBuffer().then(function(ab){docState.buf=new Uint8Array(ab);return extractOfficeText(docState.buf,ext);}).then(function(t){docState.text=t;renderDocPreview();}).catch(function(err){alert('讀取失敗：'+err.message);}); }
+  }
+  function renderDocPreview(){
+    docDrop.style.display='none'; docResult.style.display='block';
+    $('#docName').textContent=docState.name;
+    $('#docBadge').textContent={docx:'Word',pptx:'PowerPoint',txt:'純文字'}[docState.ext]||docState.ext;
+    var text=docState.text,hits=collect(text),i=0,html='',biz=0,pii=0;
+    hits.forEach(function(h){ html+=esc(text.slice(i,h.start)); html+='<mark data-grp="'+h.grp+'" title="'+esc(h.label)+'：'+esc(h.value)+'">'+esc(h.value)+'</mark>'; i=h.end; h.grp==='biz'?biz++:pii++; });
+    html+=esc(text.slice(i));
+    $('#docPreview').innerHTML=html||'<span style="color:var(--ink-3)">（此檔沒抓到可處理的文字內容）</span>';
+    $('#docStats').innerHTML=
+      '<div class="stat"><span class="n total"></span><b>'+hits.length+'</b><span class="k">項將遮蔽</span></div>'+
+      '<div class="stat"><span class="n biz"></span><b>'+biz+'</b><span class="k">商業敏感</span></div>'+
+      '<div class="stat"><span class="n pii"></span><b>'+pii+'</b><span class="k">個資 PII</span></div>';
+  }
+  $('#docDownload').addEventListener('click',function(){
+    var btn=$('#docDownload'),o=btn.innerHTML;btn.textContent='處理中…';btn.disabled=true;
+    var done=function(blob,fname){var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000);btn.innerHTML=o;btn.disabled=false;};
+    var fail=function(err){alert('處理失敗：'+err.message);btn.innerHTML=o;btn.disabled=false;};
+    var base=docState.name.replace(/\.[^.]+$/,''),ext=docState.ext;
+    if(ext==='txt'){ tokenMaps={}; done(new Blob([maskText(docState.text).out],{type:'text/plain;charset=utf-8'}),base+'-redacted.txt'); return; }
+    var mime=ext==='docx'?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    processOffice(docState.buf,ext).then(function(r){done(new Blob([r.out],{type:mime}),base+'-redacted.'+ext);}).catch(fail);
+  });
 
   /* =======================================================
      IMAGE REDACTION (manual boxes, pure canvas)

@@ -12,7 +12,7 @@ A privacy-first, fully client-side redaction tool. Nothing is uploaded — every
   - 公司名 · 客戶名 · 專案號 · 型號/序號 · 金額 · Email · 電話 · 身分證 · 統編 · 信用卡 · IP/MAC · 地址 ＋ 自訂字典
   - 4 種遮蔽方式：**塗黑** / **類別標籤** / **一致假名** / **雜湊**
 - **圖片 Image** — 上傳截圖或照片 → 拖曳框選 → **塗黑 / 模糊 / 馬賽克** → 匯出 PNG
-- **文件 Document（開發中 WIP）** — 直接上傳 **PDF / Word (.docx) / PowerPoint (.pptx)**，一次處理文字＋照片，還你**同格式**的遮蔽檔
+- **文件 Document** — 直接上傳 **Word (.docx) / PowerPoint (.pptx)**（純前端解壓）→ 偵測遮蔽 → 還你**同格式、保留排版**的遮蔽檔；純文字 (.txt) 亦可。**PDF 與照片內文字/人臉為下一版。**
 
 ## 使用 Usage
 
@@ -28,10 +28,13 @@ A privacy-first, fully client-side redaction tool. Nothing is uploaded — every
 ## Roadmap
 
 - [x] 文字偵測引擎（公司/客戶/PII…）＋ 圖片手動框遮蔽
-- [ ] 文件上傳：Word / PPT（零依賴解壓）＋ PDF（pdf.js 攤平成不可反選）
-- [ ] 照片內文字 OCR ＋ 人臉自動偵測
+- [x] 文件上傳：**Word (.docx) / PowerPoint (.pptx)** — 零依賴解壓→遮蔽→同格式下載（保留排版）
+- [ ] 文件上傳：**PDF** — pdf.js render + 座標塗黑 + 攤平成不可反選
+- [ ] 照片內文字 OCR ＋ 人臉自動偵測（含 PDF/Word/PPT 內嵌照片）
 - [ ] PWA 離線安裝（Windows / Mac 桌面 App）
 - [ ] 客戶名字典接 D1 `customers` 自動帶入
+
+> ⚠️ 已知限制：Word/PPT 的敏感詞若被拆成多個 run（同一詞跨格式片段）目前逐 run 偵測，可能漏抓；多數欄位（email/電話/公司名）落在單一 run，實務命中率高。跨 run 合併偵測為後續改進。
 
 ## 授權 License
 
